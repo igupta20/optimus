@@ -83,10 +83,10 @@ bearSignal = dirSt == 1 and dirSt[1] == -1
 tagColor = dirHtf == -1 ? color.new(coolBlue, 0) : color.new(color.red, 0)
 
 plotshape(bullSignal, title = "Long Tag", style = shape.labelup, location = location.belowbar,
-          text = "LONG", size = size.tiny, color = tagColor, textcolor = color.white)
+          text = "LONG", size = size.auto, color = tagColor, textcolor = color.white)
 
 plotshape(bearSignal, title = "Short Tag", style = shape.labeldown, location = location.abovebar,
-          text = "SHORT", size = size.tiny, color = tagColor, textcolor = color.white)
+          text = "SHORT", size = size.auto, color = tagColor, textcolor = color.white)
 
-alertcondition(bullSignal, title = "Supertrend BUY",  message = "Supertrend LTF Bullish (BUY)")
-alertcondition(bearSignal, title = "Supertrend SELL", message = "Supertrend LTF Bearish (SELL)")
+alertcondition(bullSignal, title = "LONG",  message = "(LONG)")
+alertcondition(bearSignal, title = "SHORT", message = "(SHORT)")
