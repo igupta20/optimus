@@ -1,0 +1,92 @@
+//@version=6
+indicator("Optimus", overlay = true)
+
+//────────────────────────────────────────────────────────────
+// Auto‑select higher timeframe - EXACT FROM ORIGINAL
+//────────────────────────────────────────────────────────────
+HTF = timeframe.period == "1"   ? "5"   :
+      timeframe.period == "3"   ? "15"  :
+      timeframe.period == "5"   ? "15"  :
+      timeframe.period == "15"  ? "60"  :
+      timeframe.period == "30"  ? "60"  :
+      timeframe.period == "45"  ? "60"  :
+      timeframe.period == "60"  ? "240" :
+      timeframe.period == "120" ? "240" :
+      timeframe.period == "180" ? "240" :
+      timeframe.period == "240" ? "D"   :
+      timeframe.period == "D" or timeframe.period == "1D" ? "W" :
+                                   "5W"
+
+// Fixed settings (no user inputs)
+mult      = 1.7
+period    = 10
+emaPeriod = 10
+atrPeriod = 14
+atrMultiplier = 0.1
+
+//────────────────────────────────────────────────────────────
+// Base (current‑TF) Supertrend
+//────────────────────────────────────────────────────────────
+[trailSt, dirSt] = ta.supertrend(mult, period)
+
+//────────────────────────────────────────────────────────────
+// HTF Supertrend - EXACT FROM ORIGINAL WITH [1] OFFSET
+//────────────────────────────────────────────────────────────
+htf_st() =>
+    [TrailingslHtf, TrendHtf] = ta.supertrend(mult, period)
+    [TrailingslHtf[1], TrendHtf[1]]
+
+[trailHtf, dirHtf] = request.security(syminfo.tickerid, HTF, htf_st(), lookahead = barmerge.lookahead_on)
+
+//────────────────────────────────────────────────────────────
+// EMA fan with ATR-based dynamic spacing
+//────────────────────────────────────────────────────────────
+baseEma = ta.ema(close, emaPeriod)
+atr = ta.atr(atrPeriod)
+
+// Calculate ATR as percentage of price for consistent spacing
+atrPercent = atr / close
+
+// Dynamic offsets that scale with volatility
+offset1 = atrPercent * atrMultiplier * 1
+offset2 = atrPercent * atrMultiplier * 2
+offset3 = atrPercent * atrMultiplier * 3
+offset4 = atrPercent * atrMultiplier * 4
+offset5 = atrPercent * atrMultiplier * 5
+
+coolBlue = #0066CC
+
+// Calculate EMAs with dynamic ATR-based offsets
+ema1 = baseEma * (1 + (dirHtf == -1 ? -offset1 : offset1))
+ema2 = baseEma * (1 + (dirHtf == -1 ? -offset2 : offset2))
+ema3 = baseEma * (1 + (dirHtf == -1 ? -offset3 : offset3))
+ema4 = baseEma * (1 + (dirHtf == -1 ? -offset4 : offset4))
+ema5 = baseEma * (1 + (dirHtf == -1 ? -offset5 : offset5))
+
+// Plot with dynamic colors
+plot(ema1, "Signal 1", dirHtf == -1 ? color.new(coolBlue, 0) : color.new(color.red, 0),   linewidth = 2, display = display.pane)
+plot(ema2, "Signal 2", dirHtf == -1 ? color.new(coolBlue, 10) : color.new(color.red, 10), linewidth = 2, display = display.pane)
+plot(ema3, "Signal 3", dirHtf == -1 ? color.new(coolBlue, 20) : color.new(color.red, 20), linewidth = 2, display = display.pane)
+plot(ema4, "Signal 4", dirHtf == -1 ? color.new(coolBlue, 30) : color.new(color.red, 30), linewidth = 2, display = display.pane)
+plot(ema5, "Signal 5", dirHtf == -1 ? color.new(coolBlue, 40) : color.new(color.red, 40), linewidth = 2, display = display.pane)
+
+//────────────────────────────────────────────────────────────
+// Signal Logic - MODIFIED: Based only on smaller timeframe supertrend
+//────────────────────────────────────────────────────────────
+// BUY: When smaller TF supertrend becomes bullish
+bullSignal = dirSt == -1 and dirSt[1] == 1
+
+// SELL: When smaller TF supertrend becomes bearish
+bearSignal = dirSt == 1 and dirSt[1] == -1
+
+// Dynamic tag colors based on HTF trend
+tagColor = dirHtf == -1 ? color.new(coolBlue, 0) : color.new(color.red, 0)
+
+plotshape(bullSignal, title = "Long Tag", style = shape.labelup, location = location.belowbar,
+          text = "LONG", size = size.tiny, color = tagColor, textcolor = color.white)
+
+plotshape(bearSignal, title = "Short Tag", style = shape.labeldown, location = location.abovebar,
+          text = "SHORT", size = size.tiny, color = tagColor, textcolor = color.white)
+
+alertcondition(bullSignal, title = "Supertrend BUY",  message = "Supertrend LTF Bullish (BUY)")
+alertcondition(bearSignal, title = "Supertrend SELL", message = "Supertrend LTF Bearish (SELL)")
