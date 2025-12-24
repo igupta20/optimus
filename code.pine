@@ -1,92 +1,274 @@
-//@version=6
-indicator("Optimus", overlay = true)
+//@version=5
+indicator(title="Optimus", overlay=true, max_boxes_count=500, max_lines_count=500)
 
-//────────────────────────────────────────────────────────────
-// Auto‑select higher timeframe - EXACT FROM ORIGINAL
-//────────────────────────────────────────────────────────────
-HTF = timeframe.period == "1"   ? "5"   :
-      timeframe.period == "3"   ? "15"  :
-      timeframe.period == "5"   ? "15"  :
-      timeframe.period == "15"  ? "60"  :
-      timeframe.period == "30"  ? "60"  :
-      timeframe.period == "45"  ? "60"  :
-      timeframe.period == "60"  ? "240" :
-      timeframe.period == "120" ? "240" :
-      timeframe.period == "180" ? "240" :
-      timeframe.period == "240" ? "D"   :
-      timeframe.period == "D" or timeframe.period == "1D" ? "W" :
-                                   "5W"
+// --- External dependency used ONLY for the ML-style trend line (kernel regression)
+import jdehorty/KernelFunctions/2 as kernels
 
-// Fixed settings (no user inputs)
-mult      = 1.7
-period    = 10
-emaPeriod = 10
-atrPeriod = 14
-atrMultiplier = 0.1
+// ============================================================================
+// CORE SETTINGS (code-only; no user inputs)
+// ============================================================================
+// UT Bot
+float a = 2.0      // sensitivity
+int   c = 10       // ATR period
+bool  h = false    // Heikin Ashi source toggle (kept code-only)
 
-//────────────────────────────────────────────────────────────
-// Base (current‑TF) Supertrend
-//────────────────────────────────────────────────────────────
-[trailSt, dirSt] = ta.supertrend(mult, period)
+// Supertrend
+int   stAtrPeriod = 10
+float stFactor    = 3.0
 
-//────────────────────────────────────────────────────────────
-// HTF Supertrend - EXACT FROM ORIGINAL WITH [1] OFFSET
-//────────────────────────────────────────────────────────────
-htf_st() =>
-    [TrailingslHtf, TrendHtf] = ta.supertrend(mult, period)
-    [TrailingslHtf[1], TrendHtf[1]]
+// Braid Filter (used ONLY to draw boxes when state is GRAY)
+string bfMaType            = "EMA"
+int    bfPeriod1           = 3
+int    bfPeriod2           = 7
+int    bfPeriod3           = 14
+float  bfPipsMinSepPercent = 40.0
 
-[trailHtf, dirHtf] = request.security(syminfo.tickerid, HTF, htf_st(), lookahead = barmerge.lookahead_on)
+// Box styling for "dead" (gray braid) zones
+color  bfBoxFill   = color.new(color.gray, 88)
+color  bfBoxBorder = color.new(color.gray, 65)
 
-//────────────────────────────────────────────────────────────
-// EMA fan with ATR-based dynamic spacing
-//────────────────────────────────────────────────────────────
-baseEma = ta.ema(close, emaPeriod)
-atr = ta.atr(atrPeriod)
+// ============================================================================
+// BOT CALCS
+// ============================================================================
+xATR  = ta.atr(c)
+nLoss = a * xATR
 
-// Calculate ATR as percentage of price for consistent spacing
-atrPercent = atr / close
+src = h ? request.security(ticker.heikinashi(syminfo.tickerid), timeframe.period, close, lookahead=barmerge.lookahead_off) : close
 
-// Dynamic offsets that scale with volatility
-offset1 = atrPercent * atrMultiplier * 1
-offset2 = atrPercent * atrMultiplier * 2
-offset3 = atrPercent * atrMultiplier * 3
-offset4 = atrPercent * atrMultiplier * 4
-offset5 = atrPercent * atrMultiplier * 5
+var float xATRTrailingStop = na
+xATRTrailingStop := (src > nz(xATRTrailingStop[1], 0.0) and src[1] > nz(xATRTrailingStop[1], 0.0)) ? math.max(nz(xATRTrailingStop[1]), src - nLoss) :
+     (src < nz(xATRTrailingStop[1], 0.0) and src[1] < nz(xATRTrailingStop[1], 0.0)) ? math.min(nz(xATRTrailingStop[1]), src + nLoss) :
+     (src > nz(xATRTrailingStop[1], 0.0)) ? (src - nLoss) : (src + nLoss)
 
-coolBlue = #0066CC
+ema1  = ta.ema(src, 1)
+above = ta.crossover(ema1, xATRTrailingStop)
+below = ta.crossover(xATRTrailingStop, ema1)
 
-// Calculate EMAs with dynamic ATR-based offsets
-ema1 = baseEma * (1 + (dirHtf == -1 ? -offset1 : offset1))
-ema2 = baseEma * (1 + (dirHtf == -1 ? -offset2 : offset2))
-ema3 = baseEma * (1 + (dirHtf == -1 ? -offset3 : offset3))
-ema4 = baseEma * (1 + (dirHtf == -1 ? -offset4 : offset4))
-ema5 = baseEma * (1 + (dirHtf == -1 ? -offset5 : offset5))
+buy  = src > xATRTrailingStop and above
+sell = src < xATRTrailingStop and below
 
-// Plot with dynamic colors
-plot(ema1, "Signal 1", dirHtf == -1 ? color.new(coolBlue, 0) : color.new(color.red, 0),   linewidth = 2, display = display.pane)
-plot(ema2, "Signal 2", dirHtf == -1 ? color.new(coolBlue, 10) : color.new(color.red, 10), linewidth = 2, display = display.pane)
-plot(ema3, "Signal 3", dirHtf == -1 ? color.new(coolBlue, 20) : color.new(color.red, 20), linewidth = 2, display = display.pane)
-plot(ema4, "Signal 4", dirHtf == -1 ? color.new(coolBlue, 30) : color.new(color.red, 30), linewidth = 2, display = display.pane)
-plot(ema5, "Signal 5", dirHtf == -1 ? color.new(coolBlue, 40) : color.new(color.red, 40), linewidth = 2, display = display.pane)
+barbuy  = src > xATRTrailingStop
+barsell = src < xATRTrailingStop
 
-//────────────────────────────────────────────────────────────
-// Signal Logic - MODIFIED: Based only on smaller timeframe supertrend
-//────────────────────────────────────────────────────────────
-// BUY: When smaller TF supertrend becomes bullish
-bullSignal = dirSt == -1 and dirSt[1] == 1
+// ============================================================================
+// TREND
+// ============================================================================
+stAtr  = ta.atr(stAtrPeriod)
+stUp   = hl2 - (stFactor * stAtr)
+stDown = hl2 + (stFactor * stAtr)
 
-// SELL: When smaller TF supertrend becomes bearish
-bearSignal = dirSt == 1 and dirSt[1] == -1
+var float stTrendUp = na
+stTrendUp := close[1] > nz(stTrendUp[1]) ? math.max(stUp, nz(stTrendUp[1])) : stUp
 
-// Dynamic tag colors based on HTF trend
-tagColor = dirHtf == -1 ? color.new(coolBlue, 0) : color.new(color.red, 0)
+var float stTrendDown = na
+stTrendDown := close[1] < nz(stTrendDown[1]) ? math.min(stDown, nz(stTrendDown[1])) : stDown
 
-plotshape(bullSignal, title = "Long Tag", style = shape.labelup, location = location.belowbar,
-          text = "LONG", size = size.auto, color = tagColor, textcolor = color.white)
+var int trend = 1
+trend := nz(trend[1], 1)
+trend := (trend == -1 and close > nz(stTrendDown[1])) ? 1 :
+         (trend == 1 and close < nz(stTrendUp[1])) ? -1 :
+         trend
 
-plotshape(bearSignal, title = "Short Tag", style = shape.labeldown, location = location.abovebar,
-          text = "SHORT", size = size.auto, color = tagColor, textcolor = color.white)
+supertrend = trend == 1 ? stTrendUp : stTrendDown
 
-alertcondition(bullSignal, title = "LONG",  message = "(LONG)")
-alertcondition(bearSignal, title = "SHORT", message = "(SHORT)")
+// Offset multipliers
+stOffset1 = stAtr * 0.3
+stOffset2 = stAtr * 0.6
+stOffset3 = stAtr * 0.9
+stOffset4 = stAtr * 1.2
+
+// ============================================================================
+// BOX FILTERS
+// ============================================================================
+
+bfMa01 = ta.ema(close, bfPeriod1)
+bfMa02 = ta.ema(open,  bfPeriod2)
+bfMa03 = ta.ema(close, bfPeriod3)
+
+bfMax = math.max(math.max(bfMa01, bfMa02), bfMa03)
+bfMin = math.min(math.min(bfMa01, bfMa02), bfMa03)
+bfDif = bfMax - bfMin
+
+bfFilter = ta.atr(14) * bfPipsMinSepPercent / 100.0
+
+// Original color logic:
+// green: ma01 > ma02 and dif > filter
+// red:   ma02 > ma01 and dif > filter
+// gray:  otherwise
+bfIsGray = not ( (bfMa01 > bfMa02 and bfDif > bfFilter) or (bfMa02 > bfMa01 and bfDif > bfFilter) )
+
+// ============================================================================
+// BOXES WHEN BRAID IS GRAY
+// - Boxes span consecutive gray runs
+// - Tight to price action within the run (updates high/low)
+// ============================================================================
+var box  bfBox      = na
+var bool bfActive   = false
+var int  bfStartBar = na
+var float bfRunHigh = na
+var float bfRunLow  = na
+
+if bfIsGray and not bfActive
+    bfActive   := true
+    bfStartBar := bar_index
+    bfRunHigh  := high
+    bfRunLow   := low
+    bfBox := box.new(bfStartBar, bfRunHigh, bar_index, bfRunLow, bgcolor=bfBoxFill, border_color=bfBoxBorder)
+
+if bfIsGray and bfActive and not na(bfBox)
+    bfRunHigh := math.max(bfRunHigh, high)
+    bfRunLow  := math.min(bfRunLow, low)
+    box.set_left(bfBox, bfStartBar)
+    box.set_right(bfBox, bar_index)
+    box.set_top(bfBox, bfRunHigh)
+    box.set_bottom(bfBox, bfRunLow)
+
+if (not bfIsGray) and bfActive
+    // End the current gray zone; leave the box on chart
+    bfActive   := false
+    bfStartBar := na
+    bfRunHigh  := na
+    bfRunLow   := na
+    bfBox      := na
+
+// ============================================================================
+// BUY SELL DOTS
+// ============================================================================
+
+// QQE Parameters (code-only)
+int   qqeRsiPeriod = 14
+int   qqeSF        = 5
+float qqeFactor    = 4.238
+int   qqeThreshold = 10  // kept for parity; not used in original signal logic
+
+qqeSrc = close
+qqeWildersPeriod = qqeRsiPeriod * 2 - 1
+
+qqeRsi   = ta.rsi(qqeSrc, qqeRsiPeriod)
+qqeRsiMa = ta.ema(qqeRsi, qqeSF)
+qqeAtrRsi = math.abs(qqeRsiMa[1] - qqeRsiMa)
+qqeMaAtrRsi = ta.ema(qqeAtrRsi, qqeWildersPeriod)
+qqeDar = ta.ema(qqeMaAtrRsi, qqeWildersPeriod) * qqeFactor
+
+var float qqeLongBand  = na
+var float qqeShortBand = na
+var int   qqeTrend     = 0
+
+qqeDeltaFastAtrRsi = qqeDar
+qqeRSIndex = qqeRsiMa
+
+qqeNewShortBand = qqeRSIndex + qqeDeltaFastAtrRsi
+qqeNewLongBand  = qqeRSIndex - qqeDeltaFastAtrRsi
+
+qqeLongBand := (qqeRSIndex[1] > nz(qqeLongBand[1]) and qqeRSIndex > nz(qqeLongBand[1])) ? math.max(nz(qqeLongBand[1]), qqeNewLongBand) : qqeNewLongBand
+qqeShortBand := (qqeRSIndex[1] < nz(qqeShortBand[1]) and qqeRSIndex < nz(qqeShortBand[1])) ? math.min(nz(qqeShortBand[1]), qqeNewShortBand) : qqeNewShortBand
+
+qqeCross1 = ta.cross(qqeLongBand[1], qqeRSIndex)
+qqeTrend := ta.cross(qqeRSIndex, qqeShortBand[1]) ? 1 : qqeCross1 ? -1 : nz(qqeTrend[1], 1)
+qqeFastAtrRsiTL = qqeTrend == 1 ? qqeLongBand : qqeShortBand
+
+// Count crosses
+var int qqeXLong  = 0
+var int qqeXShort = 0
+qqeXLong  := qqeFastAtrRsiTL < qqeRSIndex ? (qqeXLong + 1) : 0
+qqeXShort := qqeFastAtrRsiTL > qqeRSIndex ? (qqeXShort + 1) : 0
+
+qqeLongSignal  = qqeXLong == 1
+qqeShortSignal = qqeXShort == 1
+
+// Plot as DOTS (requested): blue dot for long, red dot for short
+plotshape(qqeLongSignal,  title="Long Dot",  style=shape.circle, location=location.belowbar, color=color.blue, size=size.tiny)
+plotshape(qqeShortSignal, title="Short Dot", style=shape.circle, location=location.abovebar, color=color.red,  size=size.tiny)
+
+alertcondition(qqeLongSignal,  title="Long",  message="Long")
+alertcondition(qqeShortSignal, title="Short", message="Short")
+
+// ============================================================================
+// MACHINE LEARNING TREND LINE
+// ============================================================================
+
+// Kernel settings (code-only)
+float kSrc = close
+int   kLookback = 8          // lookback window
+float kRelWeight = 8.0       // relative weighting
+int   kRegLevel = 25         // regression level
+int   kLag = 2               // lag for crossover smoothing
+bool  kUseSmoothing = false  // if true uses yhat2 vs yhat1 smoothing
+
+color kGreen = color.new(color.blue, 0)
+color kRed   = color.new(#CC3311, 20)
+
+kYhat1 = kernels.rationalQuadratic(kSrc, kLookback, kRelWeight, kRegLevel)
+kYhat2 = kernels.gaussian(kSrc, kLookback - kLag, kRegLevel)
+
+// Rate-of-change coloring (default in original when smoothing is off)
+wasBearRate = kYhat1[2] > kYhat1[1]
+wasBullRate = kYhat1[2] < kYhat1[1]
+isBearRate  = kYhat1[1] > kYhat1
+isBullRate  = kYhat1[1] < kYhat1
+
+// Smoothing coloring (when enabled)
+isBullSmooth = kYhat2 >= kYhat1
+isBearSmooth = kYhat2 <= kYhat1
+
+kLineColor = kUseSmoothing ? (isBullSmooth ? kGreen : kRed) : (isBullRate ? kGreen : kRed)
+
+plot(kYhat1, title="SMALL Trend Line", color=kLineColor, linewidth=2)
+
+// ============================================================================
+// PLOTTING (your original Optimus visuals)
+// ============================================================================
+plotshape(buy,  title="long",  text="long",  style=shape.labelup,   location=location.belowbar, color=color.blue, textcolor=color.white, size=size.auto)
+plotshape(sell, title="short", text="short", style=shape.labeldown, location=location.abovebar, color=color.red,  textcolor=color.white, size=size.auto)
+
+barcolor(barbuy  ? color.blue : na)
+barcolor(barsell ? color.red  : na)
+
+stColor = trend == 1 ? color.blue : color.red
+plot(supertrend, title="BIG TREND", color=stColor, linewidth=3, style=plot.style_linebr)
+
+bullLine1 = trend == 1 ? supertrend + stOffset1 : na
+bullLine2 = trend == 1 ? supertrend + stOffset2 : na
+bullLine3 = trend == 1 ? supertrend + stOffset3 : na
+bullLine4 = trend == 1 ? supertrend + stOffset4 : na
+
+bearLine1 = trend == -1 ? supertrend - stOffset1 : na
+bearLine2 = trend == -1 ? supertrend - stOffset2 : na
+bearLine3 = trend == -1 ? supertrend - stOffset3 : na
+bearLine4 = trend == -1 ? supertrend - stOffset4 : na
+
+plot(bullLine1, title="Bull 1", color=color.new(color.blue, 20), linewidth=2, style=plot.style_linebr)
+plot(bullLine2, title="Bull 2", color=color.new(color.blue, 40), linewidth=2, style=plot.style_linebr)
+plot(bullLine3, title="Bull 3", color=color.new(color.blue, 60), linewidth=1, style=plot.style_linebr)
+plot(bullLine4, title="Bull 4", color=color.new(color.blue, 80), linewidth=1, style=plot.style_linebr)
+
+plot(bearLine1, title="Bear 1", color=color.new(color.red, 30), linewidth=2, style=plot.style_linebr)
+plot(bearLine2, title="Bear 2", color=color.new(color.red, 50), linewidth=2, style=plot.style_linebr)
+plot(bearLine3, title="Bear 3", color=color.new(color.red, 70), linewidth=1, style=plot.style_linebr)
+plot(bearLine4, title="Bear 4", color=color.new(color.red, 85), linewidth=1, style=plot.style_linebr)
+
+// Shading (hidden plots must be linebr)
+pb0 = plot(trend == 1 ? supertrend : na, display=display.none, style=plot.style_linebr)
+pb1 = plot(bullLine1, display=display.none, style=plot.style_linebr)
+pb2 = plot(bullLine2, display=display.none, style=plot.style_linebr)
+pb3 = plot(bullLine3, display=display.none, style=plot.style_linebr)
+pb4 = plot(bullLine4, display=display.none, style=plot.style_linebr)
+
+fill(pb0, pb1, color=color.new(color.blue, 80))
+fill(pb1, pb2, color=color.new(color.blue, 87))
+fill(pb2, pb3, color=color.new(color.blue, 92))
+fill(pb3, pb4, color=color.new(color.blue, 95))
+
+ps0 = plot(trend == -1 ? supertrend : na, display=display.none, style=plot.style_linebr)
+ps1 = plot(bearLine1, display=display.none, style=plot.style_linebr)
+ps2 = plot(bearLine2, display=display.none, style=plot.style_linebr)
+ps3 = plot(bearLine3, display=display.none, style=plot.style_linebr)
+ps4 = plot(bearLine4, display=display.none, style=plot.style_linebr)
+
+fill(ps0, ps1, color=color.new(color.red, 80))
+fill(ps1, ps2, color=color.new(color.red, 87))
+fill(ps2, ps3, color=color.new(color.red, 92))
+fill(ps3, ps4, color=color.new(color.red, 95))
+
+alertcondition(buy,  title="ALGO Long",  message="ALGO Long")
+alertcondition(sell, title="ALGO Short", message="ALGO Short")
