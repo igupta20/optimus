@@ -51,7 +51,7 @@ barbuy  = src > xATRTrailingStop
 barsell = src < xATRTrailingStop
 
 // ============================================================================
-// TREND
+// BIG TREND
 // ============================================================================
 stAtr  = ta.atr(stAtrPeriod)
 stUp   = hl2 - (stFactor * stAtr)
@@ -78,7 +78,7 @@ stOffset3 = stAtr * 0.9
 stOffset4 = stAtr * 1.2
 
 // ============================================================================
-// BOX FILTERS
+// CONSOLODATION ZONES
 // ============================================================================
 
 bfMa01 = ta.ema(close, bfPeriod1)
@@ -98,9 +98,7 @@ bfFilter = ta.atr(14) * bfPipsMinSepPercent / 100.0
 bfIsGray = not ( (bfMa01 > bfMa02 and bfDif > bfFilter) or (bfMa02 > bfMa01 and bfDif > bfFilter) )
 
 // ============================================================================
-// BOXES WHEN BRAID IS GRAY
-// - Boxes span consecutive gray runs
-// - Tight to price action within the run (updates high/low)
+// BOXES 
 // ============================================================================
 var box  bfBox      = na
 var bool bfActive   = false
@@ -132,7 +130,7 @@ if (not bfIsGray) and bfActive
     bfBox      := na
 
 // ============================================================================
-// BUY SELL DOTS
+// SIGNAL DOTS
 // ============================================================================
 
 // QQE Parameters (code-only)
@@ -180,11 +178,17 @@ qqeShortSignal = qqeXShort == 1
 plotshape(qqeLongSignal,  title="Long Dot",  style=shape.circle, location=location.belowbar, color=color.blue, size=size.tiny)
 plotshape(qqeShortSignal, title="Short Dot", style=shape.circle, location=location.abovebar, color=color.red,  size=size.tiny)
 
-alertcondition(qqeLongSignal,  title="Long",  message="Long")
-alertcondition(qqeShortSignal, title="Short", message="Short")
+alertcondition(qqeLongSignal,  title="QLong",  message="QLong")
+alertcondition(qqeShortSignal, title="QShort", message="QShort")
 
 // ============================================================================
-// MACHINE LEARNING TREND LINE
+// EMA
+// ============================================================================
+ema200 = ta.ema(close, 200)
+plot(ema200, title="EMA", color=color.purple, linewidth=1)
+
+// ============================================================================
+// ML SMALL TREND
 // ============================================================================
 
 // Kernel settings (code-only)
@@ -213,13 +217,13 @@ isBearSmooth = kYhat2 <= kYhat1
 
 kLineColor = kUseSmoothing ? (isBullSmooth ? kGreen : kRed) : (isBullRate ? kGreen : kRed)
 
-plot(kYhat1, title="SMALL Trend Line", color=kLineColor, linewidth=2)
+plot(kYhat1, title="SMALL TREND", color=kLineColor, linewidth=2)
 
 // ============================================================================
 // PLOTTING (your original Optimus visuals)
 // ============================================================================
-plotshape(buy,  title="long",  text="long",  style=shape.labelup,   location=location.belowbar, color=color.blue, textcolor=color.white, size=size.auto)
-plotshape(sell, title="short", text="short", style=shape.labeldown, location=location.abovebar, color=color.red,  textcolor=color.white, size=size.auto)
+plotshape(buy,  title="LONG",  text="long",  style=shape.labelup,   location=location.belowbar, color=color.blue, textcolor=color.white, size=size.auto)
+plotshape(sell, title="SHORT", text="short", style=shape.labeldown, location=location.abovebar, color=color.red,  textcolor=color.white, size=size.auto)
 
 barcolor(barbuy  ? color.blue : na)
 barcolor(barsell ? color.red  : na)
@@ -270,5 +274,6 @@ fill(ps1, ps2, color=color.new(color.red, 87))
 fill(ps2, ps3, color=color.new(color.red, 92))
 fill(ps3, ps4, color=color.new(color.red, 95))
 
-alertcondition(buy,  title="ALGO Long",  message="ALGO Long")
-alertcondition(sell, title="ALGO Short", message="ALGO Short")
+alertcondition(buy,  title="OPTIMUS Long",  message="OPTIMUS Long")
+alertcondition(sell, title="OPTIMUS Short", message="OPTIMUS Short")
+
