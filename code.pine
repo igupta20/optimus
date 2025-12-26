@@ -3,6 +3,7 @@ indicator(title="Optimus", overlay=true, max_boxes_count=500, max_lines_count=50
 
 // --- External dependency used ONLY for the ML-style trend line (kernel regression)
 import jdehorty/KernelFunctions/2 as kernels
+import jdehorty/MLExtensions/2 as ml
 
 // ============================================================================
 // CORE SETTINGS (code-only; no user inputs)
@@ -220,6 +221,131 @@ kLineColor = kUseSmoothing ? (isBullSmooth ? kGreen : kRed) : (isBullRate ? kGre
 plot(kYhat1, title="SMALL TREND", color=kLineColor, linewidth=2)
 
 // ============================================================================
+// ML BUY/SELL TRIANGLES (extracted feature only)
+// ============================================================================
+
+// --- Lorentzian ML settings (code-only)
+float mlSrc = close
+int   mlNeighborsCount = 8
+int   mlMaxBarsBack    = 2000
+int   mlFeatureCount   = 5
+
+// Filters (code-only; mirrors defaults from the source script)
+bool  mlUseVolatilityFilter = true
+bool  mlUseRegimeFilter     = true
+bool  mlUseAdxFilter        = false
+float mlRegimeThreshold     = -0.1
+int   mlAdxThreshold        = 20
+
+// Feature engineering (code-only; mirrors defaults from the source script)
+string f1_string = "RSI"  
+int    f1_paramA = 14
+int    f1_paramB = 1
+string f2_string = "WT"
+int    f2_paramA = 10
+int    f2_paramB = 11
+string f3_string = "CCI"
+int    f3_paramA = 20
+int    f3_paramB = 1
+string f4_string = "ADX"
+int    f4_paramA = 20
+int    f4_paramB = 2
+string f5_string = "RSI"
+int    f5_paramA = 9
+int    f5_paramB = 1
+
+// Direction labels
+int dirLong = 1
+int dirShort = -1
+int dirNeutral = 0
+
+// Helper: normalized feature series
+series_from(string feature_string, float _close, float _high, float _low, float _hlc3, int pA, int pB) =>
+    switch feature_string
+        "RSI" => ml.n_rsi(_close, pA, pB)
+        "WT"  => ml.n_wt(_hlc3, pA, pB)
+        "CCI" => ml.n_cci(_close, pA, pB)
+        "ADX" => ml.n_adx(_high, _low, _close, pA)
+
+// Current feature values
+f1 = series_from(f1_string, close, high, low, hlc3, f1_paramA, f1_paramB)
+f2 = series_from(f2_string, close, high, low, hlc3, f2_paramA, f2_paramB)
+f3 = series_from(f3_string, close, high, low, hlc3, f3_paramA, f3_paramB)
+f4 = series_from(f4_string, close, high, low, hlc3, f4_paramA, f4_paramB)
+f5 = series_from(f5_string, close, high, low, hlc3, f5_paramA, f5_paramB)
+
+// Store historical feature values in arrays (training data)
+var f1Array = array.new_float()
+var f2Array = array.new_float()
+var f3Array = array.new_float()
+var f4Array = array.new_float()
+var f5Array = array.new_float()
+array.push(f1Array, f1)
+array.push(f2Array, f2)
+array.push(f3Array, f3)
+array.push(f4Array, f4)
+array.push(f5Array, f5)
+
+// Lorentzian distance (featureCount fixed to 5 here)
+get_lorentzian_distance(int i) => math.log(1 + math.abs(f1 - array.get(f1Array, i))) + math.log(1 + math.abs(f2 - array.get(f2Array, i))) + math.log(1 + math.abs(f3 - array.get(f3Array, i))) + math.log(1 + math.abs(f4 - array.get(f4Array, i))) + math.log(1 + math.abs(f5 - array.get(f5Array, i)))
+
+// Training label: direction over next 4 bars (hardcoded to 4 as in source)
+y_train_series = mlSrc[4] < mlSrc ? dirShort : (mlSrc[4] > mlSrc ? dirLong : dirNeutral)
+var y_train_array = array.new_int()
+array.push(y_train_array, y_train_series)
+
+// Filters (same functions as source)
+filterVol = ml.filter_volatility(1, 10, mlUseVolatilityFilter)
+filterReg = ml.regime_filter(ohlc4, mlRegimeThreshold, mlUseRegimeFilter)
+filterAdx = ml.filter_adx(mlSrc, 14, mlAdxThreshold, mlUseAdxFilter)
+filter_all = filterVol and filterReg and filterAdx
+
+// Core ANN loop storage
+var predictions = array.new_float()
+var distances   = array.new_float()
+var float prediction = 0.0
+var int signal = dirNeutral
+
+maxBarsBackIndex = last_bar_index >= mlMaxBarsBack ? last_bar_index - mlMaxBarsBack : 0
+
+lastDistance = -1.0
+size = math.min(mlMaxBarsBack - 1, array.size(y_train_array) - 1)
+sizeLoop = math.min(mlMaxBarsBack - 1, size)
+
+if bar_index >= maxBarsBackIndex
+    for i = 0 to sizeLoop
+        d = get_lorentzian_distance(i)
+        // note: source uses modulo spacing of 4 bars
+        if d >= lastDistance and (i % 4 != 0)
+            lastDistance := d
+            array.push(distances, d)
+            array.push(predictions, math.round(array.get(y_train_array, i)))
+            if array.size(predictions) > mlNeighborsCount
+                lastDistance := array.get(distances, math.round(mlNeighborsCount * 3 / 4))
+                array.shift(distances)
+                array.shift(predictions)
+    prediction := array.sum(predictions)
+
+// Filtered directional signal
+signal := prediction > 0 and filter_all ? dirLong : (prediction < 0 and filter_all ? dirShort : nz(signal[1]))
+
+// Kernel filter (re-uses SMALL TREND kernel state already computed above)
+mlIsBullish = kUseSmoothing ? isBullSmooth : isBullRate
+mlIsBearish = kUseSmoothing ? isBearSmooth : isBearRate
+
+// Entries (only the label feature)
+isDifferentSignalType = ta.change(signal)
+isNewBuySignal  = (signal == dirLong)  and isDifferentSignalType
+isNewSellSignal = (signal == dirShort) and isDifferentSignalType
+
+mlStartLong = isNewBuySignal  and mlIsBullish
+mlStartShort = isNewSellSignal and mlIsBearish
+
+// Plot triangles (requested colors)
+plotshape(mlStartLong,  title="ML long Buy",  style=shape.triangleup,   location=location.belowbar, color=color.blue, size=size.normal, offset=0, text="BUY", textcolor=color.white)
+plotshape(mlStartShort, title="ML long Sell", style=shape.triangledown, location=location.abovebar, color=color.red,  size=size.normal, offset=0, text="SELL", textcolor=color.white)
+
+// ============================================================================
 // PLOTTING (your original Optimus visuals)
 // ============================================================================
 plotshape(buy,  title="LONG",  text="long",  style=shape.labelup,   location=location.belowbar, color=color.blue, textcolor=color.white, size=size.auto)
@@ -276,4 +402,3 @@ fill(ps3, ps4, color=color.new(color.red, 95))
 
 alertcondition(buy,  title="OPTIMUS Long",  message="OPTIMUS Long")
 alertcondition(sell, title="OPTIMUS Short", message="OPTIMUS Short")
-
