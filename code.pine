@@ -179,9 +179,6 @@ qqeShortSignal = qqeXShort == 1
 plotshape(qqeLongSignal,  title="Long Dot",  style=shape.circle, location=location.belowbar, color=color.blue, size=size.tiny)
 plotshape(qqeShortSignal, title="Short Dot", style=shape.circle, location=location.abovebar, color=color.red,  size=size.tiny)
 
-alertcondition(qqeLongSignal,  title="QLong",  message="QLong")
-alertcondition(qqeShortSignal, title="QShort", message="QShort")
-
 // ============================================================================
 // EMA
 // ============================================================================
@@ -334,7 +331,7 @@ mlIsBullish = kUseSmoothing ? isBullSmooth : isBullRate
 mlIsBearish = kUseSmoothing ? isBearSmooth : isBearRate
 
 // Entries (only the label feature)
-isDifferentSignalType = ta.change(signal)
+isDifferentSignalType = ta.change(signal) != 0
 isNewBuySignal  = (signal == dirLong)  and isDifferentSignalType
 isNewSellSignal = (signal == dirShort) and isDifferentSignalType
 
@@ -342,8 +339,73 @@ mlStartLong = isNewBuySignal  and mlIsBullish
 mlStartShort = isNewSellSignal and mlIsBearish
 
 // Plot triangles (requested colors)
-plotshape(mlStartLong,  title="ML long Buy",  style=shape.triangleup,   location=location.belowbar, color=color.blue, size=size.normal, offset=0, text="BUY", textcolor=color.white)
-plotshape(mlStartShort, title="ML long Sell", style=shape.triangledown, location=location.abovebar, color=color.red,  size=size.normal, offset=0, text="SELL", textcolor=color.white)
+plotshape(mlStartLong,  title="ML long Buy",  style=shape.triangleup,   location=location.belowbar, color=color.blue, size=size.small, offset=0, text="BUY", textcolor=color.white)
+plotshape(mlStartShort, title="ML long Sell", style=shape.triangledown, location=location.abovebar, color=color.red,  size=size.small, offset=0, text="SELL", textcolor=color.white)
+
+// ============================================================================
+// ATR BANDS
+// ============================================================================
+
+// --- TwinSmooth settings (kept code-only to match Optimus style)
+int   tsSMMALen   = 24
+int   tsTEMALen   = 8
+int   tsEMALen    = 14
+float tsAtrMult   = 1.1
+int   tsAtrLen    = 14
+
+// --- SMMA helper
+F_SMMA(float _src, int _len) =>
+    // Call ta.sma() every bar for consistency
+    float _sma  = ta.sma(_src, _len)
+    float _smma = na
+    if bar_index >= _len - 1
+        float _alpha = 1.0 / _len
+        _smma := na(_smma[1]) ? _sma : (_src - _smma[1]) * _alpha + _smma[1]
+    else
+        _smma := _src
+    _smma
+
+// --- TEMA helper (Pine v5 doesn't have ta.tema on all accounts)
+F_TEMA(float _src, int _len) =>
+    float _ema1 = ta.ema(_src, _len)
+    float _ema2 = ta.ema(_ema1, _len)
+    float _ema3 = ta.ema(_ema2, _len)
+    3.0 * _ema1 - 3.0 * _ema2 + _ema3
+
+// Base calculation
+float tsSmma      = F_SMMA(close, tsSMMALen)
+float tsTema      = F_TEMA(close, tsTEMALen)
+float tsBase      = (tsSmma + tsTema) / 2.0
+float tsTrendBase = ta.ema(tsBase, tsEMALen)
+
+// ATR bands
+float tsAtr   = ta.atr(tsAtrLen)
+float tsUpper = tsTrendBase + tsAtr * tsAtrMult
+float tsLower = tsTrendBase - tsAtr * tsAtrMult
+
+// State (QB): 1 = bullish, -1 = bearish, else keep prior
+bool tsLongC  = close > tsUpper
+bool tsShortC = close < tsLower
+
+var int tsQB = 0
+if tsShortC
+    tsQB := -1
+else if tsLongC and not tsShortC
+    tsQB := 1
+else
+    tsQB := nz(tsQB[1], 0)
+
+color tsUp = color.rgb(0, 221, 255)
+color tsDn = color.rgb(219, 77, 12)
+color tsNu = color.gray
+color tsColor = tsQB == 1 ? tsUp : tsQB == -1 ? tsDn : tsNu
+
+// Plot the ACTIVE band + a light fill to close (no candle override; Optimus already barcolors)
+float tsActiveBand = tsQB == 1 ? tsLower : tsUpper
+tsBandPlot = plot(tsActiveBand, title="ATR BANDS", color=color.new(tsColor, 15), linewidth=1)
+tsClosePlot = plot(close, title="Close", display=display.none)
+fill(tsBandPlot, tsClosePlot, color=color.new(tsColor, 82))
+
 
 // ============================================================================
 // PLOTTING (your original Optimus visuals)
@@ -384,10 +446,10 @@ pb2 = plot(bullLine2, display=display.none, style=plot.style_linebr)
 pb3 = plot(bullLine3, display=display.none, style=plot.style_linebr)
 pb4 = plot(bullLine4, display=display.none, style=plot.style_linebr)
 
-fill(pb0, pb1, color=color.new(color.blue, 80))
-fill(pb1, pb2, color=color.new(color.blue, 87))
-fill(pb2, pb3, color=color.new(color.blue, 92))
-fill(pb3, pb4, color=color.new(color.blue, 95))
+fill(pb0, pb1, color=color.new(color.blue, 92))
+fill(pb1, pb2, color=color.new(color.blue, 95))
+fill(pb2, pb3, color=color.new(color.blue, 97))
+fill(pb3, pb4, color=color.new(color.blue, 98))
 
 ps0 = plot(trend == -1 ? supertrend : na, display=display.none, style=plot.style_linebr)
 ps1 = plot(bearLine1, display=display.none, style=plot.style_linebr)
@@ -395,10 +457,8 @@ ps2 = plot(bearLine2, display=display.none, style=plot.style_linebr)
 ps3 = plot(bearLine3, display=display.none, style=plot.style_linebr)
 ps4 = plot(bearLine4, display=display.none, style=plot.style_linebr)
 
-fill(ps0, ps1, color=color.new(color.red, 80))
-fill(ps1, ps2, color=color.new(color.red, 87))
-fill(ps2, ps3, color=color.new(color.red, 92))
-fill(ps3, ps4, color=color.new(color.red, 95))
+fill(ps0, ps1, color=color.new(color.red, 92))
+fill(ps1, ps2, color=color.new(color.red, 95))
+fill(ps2, ps3, color=color.new(color.red, 97))
+fill(ps3, ps4, color=color.new(color.red, 98))
 
-alertcondition(buy,  title="OPTIMUS Long",  message="OPTIMUS Long")
-alertcondition(sell, title="OPTIMUS Short", message="OPTIMUS Short")
